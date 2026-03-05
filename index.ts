@@ -17,12 +17,22 @@ type OrderItem = {
     readonly quantity: number;
 };
 
+type OrderEvent = 
+    | { type: "ORDER_CREATED"; orderId: OrderId }
+    | { type: "ITEM_ADDED"; orderId: OrderId; itemName: string; price: Money }
+    | { type: "ORDER_CONFIRMED"; orderId: OrderId; total: Money }
+    | { type: "ORDER_COMPLETED"; orderId: OrderId }
+    | { type: "ORDER_CANCELLED"; orderId: OrderId };
+
+type Observer<T> = (event: T) => void;
+
 type Order = {
     readonly id: OrderId;
     readonly createdAt: Date;
     readonly status: OrderStatus;
     readonly items: readonly OrderItem[];
     readonly total: Money;
+    readonly observers: readonly Observer<OrderEvent>[];
 };
 
 function createMoney(amount: number, currency: Currency): Money {
@@ -50,14 +60,35 @@ function format(money: Money): string {
     return `${money.amount.toFixed(2)} ${money.currency}`;
 }
 
-function createOrder(currency: Currency): Order {
+function notify(order: Order, event: OrderEvent): void {
+    order.observers.forEach(observer => observer(event));
+}
+
+function subscribe(order: Order, observer: Observer<OrderEvent>): Order {
     return {
+        ...order,
+        observers: [...order.observers, observer]
+    };
+}
+
+function unsubscribe(order: Order, observer: Observer<OrderEvent>): Order {
+    return {
+        ...order,
+        observers: order.observers.filter(obs => obs !== observer)
+    };
+}
+
+function createOrder(currency: Currency): Order {
+    const order: Order = {
         id: uuidv4() as OrderId,
         createdAt: new Date(),
         status: "OPEN",
         items: [],
-        total: createMoney(0, currency)
+        total: createMoney(0, currency),
+        observers: []
     };
+    notify(order, { type: "ORDER_CREATED", orderId: order.id });
+    return order;
 }
 
 function addItem(order: Order, itemName: string, price: Money, qty: number): Order {
@@ -74,11 +105,13 @@ function addItem(order: Order, itemName: string, price: Money, qty: number): Ord
     const newTotal = add(order.total, itemTotal);
     const newItem: OrderItem = { name: itemName, price, quantity: qty };
     
-    return {
+    const updated = {
         ...order,
         items: [...order.items, newItem],
         total: newTotal
     };
+    notify(updated, { type: "ITEM_ADDED", orderId: order.id, itemName, price });
+    return updated;
 }
 
 function confirmOrder(order: Order): Order {
@@ -88,28 +121,53 @@ function confirmOrder(order: Order): Order {
     if (order.status !== "OPEN") {
         throw new Error(`Cannot confirm ${order.status} order!`);
     }
-    return { ...order, status: "CONFIRMED" };
+    const updated = { ...order, status: "CONFIRMED" as OrderStatus };
+    notify(updated, { type: "ORDER_CONFIRMED", orderId: order.id, total: order.total });
+    return updated;
 }
 
 function completeOrder(order: Order): Order {
     if (order.status !== "CONFIRMED") {
         throw new Error("Can only complete CONFIRMED orders!");
     }
-    return { ...order, status: "COMPLETED" };
+    const updated = { ...order, status: "COMPLETED" as OrderStatus };
+    notify(updated, { type: "ORDER_COMPLETED", orderId: order.id });
+    return updated;
 }
 
 function cancelOrder(order: Order): Order {
     if (order.status === "COMPLETED") {
         throw new Error("Cannot cancel COMPLETED order!");
     }
-    return { ...order, status: "CANCELLED" };
+    const updated = { ...order, status: "CANCELLED" as OrderStatus };
+    notify(updated, { type: "ORDER_CANCELLED", orderId: order.id });
+    return updated;
 }
 
-const order1 = createOrder("EUR");
-const order1_v2 = addItem(order1, "Burger", createMoney(12.99, "EUR"), 2);
-const order1_v3 = addItem(order1_v2, "Fries", createMoney(5.99, "EUR"), 1);
-const order1_v4 = confirmOrder(order1_v3);
-const order1_v5 = completeOrder(order1_v4);
+const logObserver: Observer<OrderEvent> = (event) => {
+    console.log("[LOG]", event.type, event);
+};
 
-console.log(order1_v5);
-console.log("Total:", format(order1_v5.total));
+const emailObserver: Observer<OrderEvent> = (event) => {
+    if (event.type === "ORDER_CONFIRMED") {
+        console.log("[EMAIL] Sending confirmation email...");
+    }
+};
+
+const uiObserver: Observer<OrderEvent> = (event) => {
+    console.log("[UI] Updating UI:", event.type);
+};
+
+let order = createOrder("EUR");
+order = subscribe(order, logObserver);
+order = subscribe(order, emailObserver);
+order = subscribe(order, uiObserver);
+
+order = addItem(order, "Burger", createMoney(12.99, "EUR"), 2);
+order = addItem(order, "Fries", createMoney(5.99, "EUR"), 1);
+
+
+order = confirmOrder(order);
+order = unsubscribe(order, emailObserver);
+
+order = completeOrder(order);
