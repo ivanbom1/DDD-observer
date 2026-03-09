@@ -9,6 +9,8 @@ type Money = {
     readonly currency: Currency;
 };
 
+//TEST
+
 type OrderStatus = "OPEN" | "CONFIRMED" | "COMPLETED" | "CANCELLED";
 
 type OrderItem = {
