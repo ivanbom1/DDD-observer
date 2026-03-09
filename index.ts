@@ -26,13 +26,28 @@ type OrderEvent =
 
 type Observer<T> = (event: T) => void;
 
+class Observable<T> {
+    private observers: Observer<T>[] = [];
+
+    subscribe(observer: Observer<T>): void {
+        this.observers.push(observer);
+    }
+
+    unsubscribe(observer: Observer<T>): void {
+        this.observers = this.observers.filter(obs => obs !== observer);
+    }
+
+    notify(event: T): void {
+        this.observers.forEach(observer => observer(event));
+    }
+}
+
 type Order = {
     readonly id: OrderId;
     readonly createdAt: Date;
     readonly status: OrderStatus;
     readonly items: readonly OrderItem[];
     readonly total: Money;
-    readonly observers: readonly Observer<OrderEvent>[];
 };
 
 function createMoney(amount: number, currency: Currency): Money {
@@ -56,42 +71,19 @@ function multiply(money: Money, factor: number): Money {
     return createMoney(money.amount * factor, money.currency);
 }
 
-function format(money: Money): string {
-    return `${money.amount.toFixed(2)} ${money.currency}`;
-}
-
-function notify(order: Order, event: OrderEvent): void {
-    order.observers.forEach(observer => observer(event));
-}
-
-function subscribe(order: Order, observer: Observer<OrderEvent>): Order {
-    return {
-        ...order,
-        observers: [...order.observers, observer]
-    };
-}
-
-function unsubscribe(order: Order, observer: Observer<OrderEvent>): Order {
-    return {
-        ...order,
-        observers: order.observers.filter(obs => obs !== observer)
-    };
-}
-
-function createOrder(currency: Currency): Order {
+function createOrder(currency: Currency, events: Observable<OrderEvent>): Order {
     const order: Order = {
         id: uuidv4() as OrderId,
         createdAt: new Date(),
         status: "OPEN",
         items: [],
-        total: createMoney(0, currency),
-        observers: []
+        total: createMoney(0, currency)
     };
-    notify(order, { type: "ORDER_CREATED", orderId: order.id });
+    events.notify({ type: "ORDER_CREATED", orderId: order.id });
     return order;
 }
 
-function addItem(order: Order, itemName: string, price: Money, qty: number): Order {
+function addItem(order: Order, itemName: string, price: Money, qty: number, events: Observable<OrderEvent>): Order {
     if (order.status !== "OPEN") {
         throw new Error(`Cannot add item to ${order.status} order!`);
     }
@@ -110,11 +102,11 @@ function addItem(order: Order, itemName: string, price: Money, qty: number): Ord
         items: [...order.items, newItem],
         total: newTotal
     };
-    notify(updated, { type: "ITEM_ADDED", orderId: order.id, itemName, price });
+    events.notify({ type: "ITEM_ADDED", orderId: order.id, itemName, price });
     return updated;
 }
 
-function confirmOrder(order: Order): Order {
+function confirmOrder(order: Order, events: Observable<OrderEvent>): Order {
     if (order.items.length === 0) {
         throw new Error("Cannot confirm empty order!");
     }
@@ -122,25 +114,25 @@ function confirmOrder(order: Order): Order {
         throw new Error(`Cannot confirm ${order.status} order!`);
     }
     const updated = { ...order, status: "CONFIRMED" as OrderStatus };
-    notify(updated, { type: "ORDER_CONFIRMED", orderId: order.id, total: order.total });
+    events.notify({ type: "ORDER_CONFIRMED", orderId: order.id, total: order.total });
     return updated;
 }
 
-function completeOrder(order: Order): Order {
+function completeOrder(order: Order, events: Observable<OrderEvent>): Order {
     if (order.status !== "CONFIRMED") {
         throw new Error("Can only complete CONFIRMED orders!");
     }
     const updated = { ...order, status: "COMPLETED" as OrderStatus };
-    notify(updated, { type: "ORDER_COMPLETED", orderId: order.id });
+    events.notify({ type: "ORDER_COMPLETED", orderId: order.id });
     return updated;
 }
 
-function cancelOrder(order: Order): Order {
+function cancelOrder(order: Order, events: Observable<OrderEvent>): Order {
     if (order.status === "COMPLETED") {
         throw new Error("Cannot cancel COMPLETED order!");
     }
     const updated = { ...order, status: "CANCELLED" as OrderStatus };
-    notify(updated, { type: "ORDER_CANCELLED", orderId: order.id });
+    events.notify({ type: "ORDER_CANCELLED", orderId: order.id });
     return updated;
 }
 
@@ -158,16 +150,17 @@ const uiObserver: Observer<OrderEvent> = (event) => {
     console.log("[UI] Updating UI:", event.type);
 };
 
-let order = createOrder("EUR");
-order = subscribe(order, logObserver);
-order = subscribe(order, emailObserver);
-order = subscribe(order, uiObserver);
 
-order = addItem(order, "Burger", createMoney(12.99, "EUR"), 2);
-order = addItem(order, "Fries", createMoney(5.99, "EUR"), 1);
+const events = new Observable<OrderEvent>();
+events.subscribe(logObserver);
+events.subscribe(emailObserver);
+events.subscribe(uiObserver);
 
+let order = createOrder("EUR", events);
+order = addItem(order, "Burger", createMoney(12.99, "EUR"), 2, events);
+order = addItem(order, "Fries", createMoney(5.99, "EUR"), 1, events);
 
-order = confirmOrder(order);
-order = unsubscribe(order, emailObserver);
+order = confirmOrder(order, events);
+events.unsubscribe(emailObserver);
 
-order = completeOrder(order);
+order = completeOrder(order, events);
